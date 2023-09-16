@@ -7,7 +7,7 @@ from sqlalchemy.orm import sessionmaker, Session, aliased
 from sqlalchemy.ext.declarative import declarative_base
 import databases
 
-DATABASE_URL = "sqlite:///./test.db"
+DATABASE_URL = "sqlite:///./test4.db"
 
 database = databases.Database(DATABASE_URL)
 engine = create_engine(DATABASE_URL)
@@ -45,6 +45,8 @@ class Teacher(Base):
     name = Column(String, index=True)
     login = Column(String, unique=True, index=True)
     password = Column(String)
+    subject = Column(String)
+
 
 class ParentStudent(Base):
     __tablename__ = "parent_students"
@@ -80,6 +82,8 @@ class Event(Base):
     user_type = Column(String)
     id_user = Column(Integer)
     id_teacher = Column(Integer)
+    name_teacher = Column(String)
+    subject = Column(String)
 
 
 # class Statistic(Base):
@@ -95,6 +99,15 @@ class Event(Base):
 #     points = Column(Integer)
 
 # Определение Pydantic моделей для валидации входных данных и ответов
+
+class GroupStudentCreate(BaseModel):
+    student_id: int
+    group_id: int
+
+class ParentStudentCreate(BaseModel):
+    id_parent: int
+    id_student: int
+
 class StudentCreate(BaseModel):
     name: str
     login: str
@@ -111,6 +124,7 @@ class TeacherCreate(BaseModel):
     name: str
     login: str
     password: str
+    subject: str
 
 
 class EventCreate(BaseModel):
@@ -119,6 +133,8 @@ class EventCreate(BaseModel):
     user_type: str
     id_user: int
     id_teacher: int
+    name_teacher: str
+    subject: str
 
 # class StatisticCreate(BaseModel):
 #     id_variant: int
@@ -133,6 +149,7 @@ class StudentResponse(BaseModel):
     name: str
     login: str
 
+
 class ParentResponse(BaseModel):
     id: int
     name: str
@@ -142,6 +159,7 @@ class TeacherResponse(BaseModel):
     id: int
     name: str
     login: str
+    subject: str
 
 
 class EventResponse(BaseModel):
@@ -151,6 +169,8 @@ class EventResponse(BaseModel):
     user_type: str
     id_user: int
     id_teacher: int
+    name_teacher: str
+    subject: str
 
 # class GetTeacherResponse(BaseModel):
 #     teacher_id: int
@@ -216,7 +236,7 @@ async def get_event_by_user(user_type: str, user_id: int):
     if user_type not in ["parent", "student"]:
         return {}
 
-    user_events = select([Event.day, Event.time, Event.id_teacher]).where(Event.user_type == user_type, Event.id_user == user_id)
+    user_events = select([Event.day, Event.time, Event.name_teacher, Event.subject]).where(Event.user_type == user_type, Event.id_user == user_id)
 
     results = await database.fetch_all(user_events)
 
@@ -225,24 +245,48 @@ async def get_event_by_user(user_type: str, user_id: int):
 
 # Регистрация студента
 @app.post("/register/student/", response_model=StudentResponse)
-async def register_student(student: StudentCreate, group = str, parent_login=str):
-    query = Student.__table__.insert().values(**student.dict())
-    last_record_id = await database.execute(query)
+async def register_student(student: StudentCreate, group: str, parent_login: str):
+    try:
+        # Вставляем данные о студенте в таблицу students
+        query = Student.__table__.insert().values(
+            name=student.name,
+            login=student.login,
+            password=student.password
+        )
+        last_record_id = await database.execute(query)
 
-    student = await database.fetch_one(Student.__table__.select().where(Student.id == last_record_id))
+        # Получаем информацию о зарегистрированном студенте
+        student = await database.fetch_one(
+            Student.__table__.select().where(Student.id == last_record_id)
+        )
 
-    #инициализация полей student_group
+        # Получаем ID группы по её имени
+        g_id = await get_group_id_by_name(group)
+        g_id = g_id.get("group_id")
 
-    g_id = await get_group_id_by_name(group)
-    query = GroupStudent.__table__.insert().values(group_id=g_id, student_id=student.id)
-    await database.execute(query)
+        # Добавляем запись в таблицу group_students
+        query = GroupStudent.__table__.insert().values(
+            group_id=g_id,
+            student_id=student.id
+        )
+        await database.execute(query)
+
+        # Получаем ID родителя по его логину
+        p_id = await get_parent_id_by_name(parent_login)
+        p_id = p_id.get('parent_id')
+
+        # Добавляем запись в таблицу parent_students
+        query = ParentStudent.__table__.insert().values(
+            id_parent=p_id,
+            id_student=student.id
+        )
+        await database.execute(query)
 
 
-    p_id = await get_parent_id_by_name(parent_login)
-    query = ParentStudent.__table__.insert().values(id_parent = p_id, id_student = student.id)
-    await database.execute(query)
+        return StudentResponse(id=student.id, name=student.name, login=student.login)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
-    return student
 
 
 @app.post("/create_event/", response_model=EventCreate)
