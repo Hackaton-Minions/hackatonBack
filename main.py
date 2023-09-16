@@ -1,3 +1,5 @@
+import json
+
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import create_engine, Column, Integer, String, ForeignKey, select
@@ -68,6 +70,30 @@ class GroupStudent(Base):
     student_id = Column(Integer, ForeignKey("students.id"), primary_key=True)
     group_id = Column(Integer, ForeignKey("groups.id"), primary_key=True)
 
+
+class Event(Base):
+    __tablename__ = "event"
+
+    id = Column(Integer, primary_key=True, index=True)
+    day = Column(String)
+    time = Column(String)
+    user_type = Column(String)
+    id_user = Column(Integer)
+    id_teacher = Column(Integer)
+
+
+# class Statistic(Base):
+#     __tablename__ = "statistics"
+#
+#     id_variant = Column(Integer)
+#     name_student = Column(String)
+#     id_student = Column(Integer, ForeignKey("students.id"), primary_key=True)
+#     date = Column(String)
+#     name_teacher = Column(String)
+#     id_teacher = Column(Integer, ForeignKey("teachers.id"), primary_key=True)
+#     number_of_exercise = Column(Integer)
+#     points = Column(Integer)
+
 # Определение Pydantic моделей для валидации входных данных и ответов
 class StudentCreate(BaseModel):
     name: str
@@ -86,6 +112,22 @@ class TeacherCreate(BaseModel):
     login: str
     password: str
 
+
+class EventCreate(BaseModel):
+    day: str
+    time: str
+    user_type: str
+    id_user: int
+    id_teacher: int
+
+# class StatisticCreate(BaseModel):
+#     id_variant: int
+#     name_student: str
+#     date: str
+#     name_teacher: str
+#     number_of_exercise: int
+#     points: int
+
 class StudentResponse(BaseModel):
     id: int
     name: str
@@ -101,21 +143,54 @@ class TeacherResponse(BaseModel):
     name: str
     login: str
 
+
+class EventResponse(BaseModel):
+    id: int
+    day: str
+    time: str
+    user_type: str
+    id_user: int
+    id_teacher: int
+
+# class GetTeacherResponse(BaseModel):
+#     teacher_id: int
+
+# class StatisticResponse(BaseModel):
+#     id_variant: int
+#     id_student: int
+#     date: str
+#     id_teacher: int
+#     number_of_exercise: int
+#     points: int
+
 # Создание таблиц в базе данных
 Base.metadata.create_all(bind=engine)
 
 # ...
 
 # Роуты для работы с данными
+@app.get("/get_parent_id/")
 async def get_parent_id_by_name(parent_name: str):
-    query = Parent.__table__.select().where(Parent.__table__.c.login == parent_name)
+    query = Parent.__table__.select().where(Parent.__table__.c.name == parent_name)
     result = await database.fetch_one(query)
 
     if result is None:
         raise HTTPException(status_code=404, detail="Parent not found")
 
-    return result["id"]
+    return {"parent_id": result["id"]}
 
+
+@app.get("/get_student_id/")
+async def get_student_by_name(student_name: str):
+    query = select([Student.id]).where(Student.name == student_name)
+    result = await database.fetch_one(query)
+
+    if result:
+        return {"student_id": result["id"]}
+    else:
+        raise HTTPException(status_code=404, detail="Student not found by the given name")
+
+@app.get("/get_group_id/")
 async def get_group_id_by_name(group_name: str):
     query = Group.__table__.select().where(Group.__table__.c.group_name == group_name)
     result = await database.fetch_one(query)
@@ -123,7 +198,18 @@ async def get_group_id_by_name(group_name: str):
     if result is None:
         raise HTTPException(status_code=404, detail="Group not found")
 
-    return result["id"]
+    return {"group_id": result["id"]}
+
+@app.get("/get_teacher_id/")
+async def get_teacher_id_by_name(teacher_name: str):
+    query = Teacher.__table__.select().where(Teacher.__table__.c.name == teacher_name)
+    result = await database.fetch_one(query)
+
+    if result is None:
+        raise HTTPException(status_code=404, detail="Teacher not found")
+
+    return {"teacher_id": result["id"]}
+
 # Регистрация студента
 @app.post("/register/student/", response_model=StudentResponse)
 async def register_student(student: StudentCreate, group = str, parent_login=str):
@@ -144,6 +230,36 @@ async def register_student(student: StudentCreate, group = str, parent_login=str
     await database.execute(query)
 
     return student
+
+
+@app.post("/create_event/", response_model=EventCreate)
+async def create_event(event: EventCreate):
+    query = Event.__table__.insert().values(**event.dict())
+    await database.execute(query)
+    return event
+
+# @app.post("add/statistics/", response_model=StatisticResponse)
+# async def add_statistic(statistic: StatisticCreate):
+#     query = Statistic.__table__.insert().values(**statistic.dict())
+#
+# @app.post("/add/statistic/")
+# def create_statistic(statistic: StatisticCreate):
+#     db = SessionLocal()
+#     db_statistic = Statistic(
+#         id_variant=statistic.id_variant,
+#         name_student=statistic.name_student,
+#         id_student=get_student_by_name(statistic.name_student),
+#         date=statistic.date,
+#         name_teacher=statistic.name_teacher,
+#         id_teacher=get_teacher_id_by_name(statistic.name_teacher),
+#         number_of_exercise=statistic.number_of_exercise,
+#         points=statistic.points
+#     )
+#     db.add(db_statistic)
+#     db.commit()
+#     db.refresh(db_statistic)
+#     return db_statistic
+
 
 # Регистрация родителя
 @app.post("/register/parent/", response_model=ParentResponse)
@@ -192,6 +308,17 @@ async def get_teachers_by_parent(parent_id: int):
     return teachers
 
 
+@app.get("/get_event/")
+async def get_event(teacher_id: int):
+    query = Event.__table__.select().where(Event.id_teacher == teacher_id)
+    results = await database.fetch_all(query)
+
+    if results:
+        return results
+    else:
+        raise HTTPException(status_code=404, detail="Events not found for the given teacher_id")
+
+
 # Геттер для студентов
 @app.get("/students/", response_model=list[StudentResponse])
 async def get_students(skip: int = 0, limit: int = 10):
@@ -212,6 +339,13 @@ async def get_teachers(skip: int = 0, limit: int = 10):
     query = Teacher.__table__.select().offset(skip).limit(limit)
     teachers = await database.fetch_all(query)
     return teachers
+
+# @app.get("/statistics/", response_model=list[StatisticResponse])
+# async def get_statistics(skip: int = 0, limit: int = 10):
+#     query = Statistic.__table__.select().offset(skip).limit(limit)
+#     statistics = await database.fetch_all(query)
+#     return statistics
+
 # ...
 @app.post("/groups/create/")
 async def create_group(group: GroupCreate):
@@ -220,6 +354,6 @@ async def create_group(group: GroupCreate):
     return {"id": group_id, **group.dict()}
 
 
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, port=8000)
+# if __name__ == "__main__":
+#     import uvicorn
+#     uvicorn.run(app, port=8000)
