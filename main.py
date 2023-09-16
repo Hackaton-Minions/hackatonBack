@@ -3,7 +3,7 @@ import json
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import create_engine, Column, Integer, String, ForeignKey, select
-from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.orm import sessionmaker, Session, aliased
 from sqlalchemy.ext.declarative import declarative_base
 import databases
 
@@ -175,7 +175,7 @@ async def get_parent_id_by_name(parent_name: str):
     result = await database.fetch_one(query)
 
     if result is None:
-        raise HTTPException(status_code=404, detail="Parent not found")
+        return {}
 
     return {"parent_id": result["id"]}
 
@@ -188,7 +188,7 @@ async def get_student_by_name(student_name: str):
     if result:
         return {"student_id": result["id"]}
     else:
-        raise HTTPException(status_code=404, detail="Student not found by the given name")
+        return {}
 
 @app.get("/get_group_id/")
 async def get_group_id_by_name(group_name: str):
@@ -196,7 +196,7 @@ async def get_group_id_by_name(group_name: str):
     result = await database.fetch_one(query)
 
     if result is None:
-        raise HTTPException(status_code=404, detail="Group not found")
+        return {}
 
     return {"group_id": result["id"]}
 
@@ -206,9 +206,22 @@ async def get_teacher_id_by_name(teacher_name: str):
     result = await database.fetch_one(query)
 
     if result is None:
-        raise HTTPException(status_code=404, detail="Teacher not found")
+        return {}
 
     return {"teacher_id": result["id"]}
+
+
+@app.get("/get_event_by_user/")
+async def get_event_by_user(user_type: str, user_id: int):
+    if user_type not in ["parent", "student"]:
+        return {}
+
+    user_events = select([Event.day, Event.time, Event.id_teacher]).where(Event.user_type == user_type, Event.id_user == user_id)
+
+    results = await database.fetch_all(user_events)
+
+    return results
+
 
 # Регистрация студента
 @app.post("/register/student/", response_model=StudentResponse)
@@ -316,7 +329,7 @@ async def get_event(teacher_id: int):
     if results:
         return results
     else:
-        raise HTTPException(status_code=404, detail="Events not found for the given teacher_id")
+        return {}
 
 
 # Геттер для студентов
@@ -354,6 +367,6 @@ async def create_group(group: GroupCreate):
     return {"id": group_id, **group.dict()}
 
 
-# if __name__ == "__main__":
-#     import uvicorn
-#     uvicorn.run(app, port=8000)
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, port=8000)
