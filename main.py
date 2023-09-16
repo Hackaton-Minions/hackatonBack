@@ -15,6 +15,9 @@ Base = declarative_base()
 
 app = FastAPI()
 
+
+
+
 # Определение моделей данных SQLAlchemy
 class Student(Base):
     __tablename__ = "students"
@@ -23,6 +26,7 @@ class Student(Base):
     name = Column(String, index=True)
     login = Column(String, unique=True, index=True)
     password = Column(String)
+
 
 class Parent(Base):
     __tablename__ = "parents"
@@ -69,6 +73,8 @@ class StudentCreate(BaseModel):
     name: str
     login: str
     password: str
+class GroupCreate(BaseModel):
+    group_name: str
 
 class ParentCreate(BaseModel):
     name: str
@@ -101,13 +107,42 @@ Base.metadata.create_all(bind=engine)
 # ...
 
 # Роуты для работы с данными
+async def get_parent_id_by_name(parent_name: str):
+    query = Parent.__table__.select().where(Parent.__table__.c.login == parent_name)
+    result = await database.fetch_one(query)
 
+    if result is None:
+        raise HTTPException(status_code=404, detail="Parent not found")
+
+    return result["id"]
+
+async def get_group_id_by_name(group_name: str):
+    query = Group.__table__.select().where(Group.__table__.c.group_name == group_name)
+    result = await database.fetch_one(query)
+
+    if result is None:
+        raise HTTPException(status_code=404, detail="Group not found")
+
+    return result["id"]
 # Регистрация студента
 @app.post("/register/student/", response_model=StudentResponse)
-async def register_student(student: StudentCreate):
+async def register_student(student: StudentCreate, group = str, parent_login=str):
     query = Student.__table__.insert().values(**student.dict())
     last_record_id = await database.execute(query)
+
     student = await database.fetch_one(Student.__table__.select().where(Student.id == last_record_id))
+
+    #инициализация полей student_group
+
+    g_id = await get_group_id_by_name(group)
+    query = GroupStudent.__table__.insert().values(group_id=g_id, student_id=student.id)
+    await database.execute(query)
+
+
+    p_id = await get_parent_id_by_name(parent_login)
+    query = ParentStudent.__table__.insert().values(id_parent = p_id, id_student = student.id)
+    await database.execute(query)
+
     return student
 
 # Регистрация родителя
@@ -118,12 +153,27 @@ async def register_parent(parent: ParentCreate):
     parent = await database.fetch_one(Parent.__table__.select().where(Parent.id == last_record_id))
     return parent
 
+async def getIds(groups):
+    query = select([Group.id]).where(Group.group_name.in_(groups))
+    group_ids = await database.fetch_all(query)
+    return group_ids
+
 # Регистрация учителя
 @app.post("/register/teacher/", response_model=TeacherResponse)
-async def register_teacher(teacher: TeacherCreate):
+async def register_teacher(teacher: TeacherCreate, groups: list[str]):
     query = Teacher.__table__.insert().values(**teacher.dict())
     last_record_id = await database.execute(query)
     teacher = await database.fetch_one(Teacher.__table__.select().where(Teacher.id == last_record_id))
+
+
+    #инициализация полей в таблицу Teacher_group
+
+
+    ids = await getIds(groups)
+    for (elem,) in ids:
+        query = TeacherGroup.__table__.insert().values(teacher_id=teacher.id, group_id=elem)
+        await database.execute(query)
+
     return teacher
 
 # Получение учителей ребенка через родителя
@@ -163,7 +213,13 @@ async def get_teachers(skip: int = 0, limit: int = 10):
     teachers = await database.fetch_all(query)
     return teachers
 # ...
+@app.post("/groups/create/")
+async def create_group(group: GroupCreate):
+    query = Group.__table__.insert().values(group_name=group.group_name)
+    group_id = await database.execute(query)
+    return {"id": group_id, **group.dict()}
+
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, port=8000, host="0.0.0.0")
