@@ -2,7 +2,7 @@ import json
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import create_engine, Column, Integer, String, ForeignKey, select, func
+from sqlalchemy import create_engine, Column, Integer, String, ForeignKey, select, func, insert, join, table
 from sqlalchemy.orm import sessionmaker, Session, aliased
 from sqlalchemy.ext.declarative import declarative_base
 import databases
@@ -164,10 +164,7 @@ async def get_parent_id_by_name(parent_name: str):
     query = Parent.__table__.select().where(Parent.__table__.c.name == parent_name)
     result = await database.fetch_one(query)
 
-    if result is None:
-        return {}
-
-    return {"parent_id": result["id"]}
+    return result["id"]
 
 
 @app.get("/get_student_id/")
@@ -180,15 +177,10 @@ async def get_student_by_name(student_name: str):
     else:
         return {}
 
-@app.get("/get_group_id/")
 async def get_group_id_by_name(group_name: str):
-    query = Group.__table__.select().where(Group.__table__.c.group_name == group_name)
-    result = await database.fetch_one(query)
-
-    if result is None:
-        return {}
-
-    return {"group_id": result["id"]}
+    query = select([Group.id]).where(Group.group_name == group_name)
+    group_id = await database.fetch_val(query)
+    return group_id
 
 @app.get("/get_teacher_id/")
 async def get_teacher_id_by_name(teacher_name: str):
@@ -201,6 +193,7 @@ async def get_teacher_id_by_name(teacher_name: str):
     return {"teacher_id": result["id"]}
 
 
+
 @app.get("/get_event_by_user/")
 async def get_event_by_user(user_type: str, user_id: int):
     if user_type not in ["parent", "student"]:
@@ -211,6 +204,7 @@ async def get_event_by_user(user_type: str, user_id: int):
     results = await database.fetch_all(user_events)
 
     return results
+
 
 
 @app.post("/authorization/")
@@ -297,7 +291,6 @@ async def register_student(student: StudentCreate, group: str, parent_login: str
 
             # Получаем ID группы по её имени
             g_id = await get_group_id_by_name(group)
-            g_id = g_id.get("group_id")
 
             # Добавляем запись в таблицу group_students
             query = GroupStudent.__table__.insert().values(
@@ -308,7 +301,6 @@ async def register_student(student: StudentCreate, group: str, parent_login: str
 
             # Получаем ID родителя по его логину
             p_id = await get_parent_id_by_name(parent_login)
-            p_id = p_id.get('parent_id')
 
             # Добавляем запись в таблицу parent_students
             query = ParentStudent.__table__.insert().values(
@@ -369,8 +361,8 @@ async def getIds(groups):
     return group_ids
 
 # Регистрация учителя
-@app.post("/register/teacher/", response_model=TeacherResponse)
-async def register_teacher(teacher: TeacherCreate, groups: list[str]):
+@app.post("/register/teacher/")
+async def register_teacher(teacher: TeacherCreate, group: str):
     query = Teacher.__table__.insert().values(**teacher.dict())
 
     login = teacher.login
@@ -391,15 +383,31 @@ async def register_teacher(teacher: TeacherCreate, groups: list[str]):
     fl = total_count > 0
 
     if not fl:
-        last_record_id = await database.execute(query)
-        teacher = await database.fetch_one(Teacher.__table__.select().where(Teacher.id == last_record_id))
+        try:
+            # Вставляем данные о учителе в таблицу Teacher
+            query = insert(Teacher).values(
+                name=teacher.name,
+                login=teacher.login,
+                password=teacher.password,
+                subject=teacher.subject
+            )
+            last_record_id = await database.execute(query)
 
-        ids = await getIds(groups)
-        for (elem,) in ids:
-            query = TeacherGroup.__table__.insert().values(teacher_id=teacher.id, group_id=elem)
-            await database.execute(query)
+            # Получаем информацию о зарегистрированном учителе
+            teacher = await database.fetch_one(
+                Teacher.__table__.select().where(Teacher.id == last_record_id)
+            )
 
-        return teacher
+            q = TeacherGroup.__table__.insert().values(
+                teacher_id=teacher.id,
+                group_id= await get_group_id_by_name(group)
+            )
+            await database.execute(q)
+
+            return teacher
+
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
 
     else:
         raise HTTPException(status_code=500, detail="This login already exists")
@@ -409,22 +417,29 @@ async def register_teacher(teacher: TeacherCreate, groups: list[str]):
 
 
 
+async def get_parent_id_by_student_id(student_id: int):
+    query = select([ParentStudent.id_parent]).where(ParentStudent.id_student == student_id)
+    parent_id = await database.fetch_val(query)
+    return parent_id
 
+async def get_group_id_by_student_id(student_id: int):
+    query = select([GroupStudent.group_id]).where(GroupStudent.student_id == student_id)
+    group_id = await database.fetch_val(query)
+    return group_id
 
-
-# Получение учителей ребенка через родителя
-@app.get("/teachers_by_parent/{parent_id}", response_model=list[TeacherResponse])
-async def get_teachers_by_parent(parent_id: int):
+async def get_teachers_by_group_id(group_id: int):
     query = (
         select([Teacher])
-        .join(TeacherGroup, TeacherGroup.c.teacher_id == Teacher.id)
-        .join(Group, Group.id == TeacherGroup.c.group_id)
-        .join(GroupStudent, GroupStudent.c.group_id == Group.id)
-        .join(Student, Student.id == GroupStudent.c.student_id)
-        .join(ParentStudent, ParentStudent.c.id_student == Student.id)
-        .where(ParentStudent.c.id_parent == parent_id)
+        .join(TeacherGroup, TeacherGroup.teacher_id == Teacher.id)
+        .where(TeacherGroup.group_id == group_id)
     )
     teachers = await database.fetch_all(query)
+    return teachers
+
+@app.get("/teachers_by_student/")
+async def get_teachers_by_student(student_id: int):
+    group_id = await get_group_id_by_student_id(student_id)  # Добавлено await
+    teachers = await get_teachers_by_group_id(group_id)  # Добавлено await
     return teachers
 
 
