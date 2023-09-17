@@ -7,7 +7,7 @@ from sqlalchemy.orm import sessionmaker, Session, aliased
 from sqlalchemy.ext.declarative import declarative_base
 import databases
 
-DATABASE_URL = "sqlite:///./test4.db"
+DATABASE_URL = "sqlite:///./test5.db"
 
 database = databases.Database(DATABASE_URL)
 engine = create_engine(DATABASE_URL)
@@ -417,10 +417,10 @@ async def register_teacher(teacher: TeacherCreate, group: str):
 
 
 
-async def get_parent_id_by_student_id(student_id: int):
-    query = select([ParentStudent.id_parent]).where(ParentStudent.id_student == student_id)
-    parent_id = await database.fetch_val(query)
-    return parent_id
+async def get_student_id_by_parent_id(parent_id: int):
+    query = select([ParentStudent.id_student]).where(ParentStudent.id_parent == parent_id)
+    student_id = await database.fetch_val(query)
+    return student_id
 
 async def get_group_id_by_student_id(student_id: int):
     query = select([GroupStudent.group_id]).where(GroupStudent.student_id == student_id)
@@ -438,6 +438,13 @@ async def get_teachers_by_group_id(group_id: int):
 
 @app.get("/teachers_by_student/")
 async def get_teachers_by_student(student_id: int):
+    group_id = await get_group_id_by_student_id(student_id)  # Добавлено await
+    teachers = await get_teachers_by_group_id(group_id)  # Добавлено await
+    return teachers
+
+@app.get("/teachers_by_parent/")
+async def get_teachers_by_parent(parent_id: int):
+    student_id = await get_student_id_by_parent_id(parent_id)
     group_id = await get_group_id_by_student_id(student_id)  # Добавлено await
     teachers = await get_teachers_by_group_id(group_id)  # Добавлено await
     return teachers
