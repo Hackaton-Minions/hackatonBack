@@ -2,7 +2,7 @@ import json
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import create_engine, Column, Integer, String, ForeignKey, select
+from sqlalchemy import create_engine, Column, Integer, String, ForeignKey, select, func
 from sqlalchemy.orm import sessionmaker, Session, aliased
 from sqlalchemy.ext.declarative import declarative_base
 import databases
@@ -86,18 +86,6 @@ class Event(Base):
     subject = Column(String)
 
 
-# class Statistic(Base):
-#     __tablename__ = "statistics"
-#
-#     id_variant = Column(Integer)
-#     name_student = Column(String)
-#     id_student = Column(Integer, ForeignKey("students.id"), primary_key=True)
-#     date = Column(String)
-#     name_teacher = Column(String)
-#     id_teacher = Column(Integer, ForeignKey("teachers.id"), primary_key=True)
-#     number_of_exercise = Column(Integer)
-#     points = Column(Integer)
-
 # Определение Pydantic моделей для валидации входных данных и ответов
 
 class GroupStudentCreate(BaseModel):
@@ -136,14 +124,6 @@ class EventCreate(BaseModel):
     name_teacher: str
     subject: str
 
-# class StatisticCreate(BaseModel):
-#     id_variant: int
-#     name_student: str
-#     date: str
-#     name_teacher: str
-#     number_of_exercise: int
-#     points: int
-
 class StudentResponse(BaseModel):
     id: int
     name: str
@@ -172,21 +152,11 @@ class EventResponse(BaseModel):
     name_teacher: str
     subject: str
 
-# class GetTeacherResponse(BaseModel):
-#     teacher_id: int
-
-# class StatisticResponse(BaseModel):
-#     id_variant: int
-#     id_student: int
-#     date: str
-#     id_teacher: int
-#     number_of_exercise: int
-#     points: int
-
 # Создание таблиц в базе данных
 Base.metadata.create_all(bind=engine)
 
 # ...
+
 
 # Роуты для работы с данными
 @app.get("/get_parent_id/")
@@ -253,37 +223,59 @@ async def register_student(student: StudentCreate, group: str, parent_login: str
             login=student.login,
             password=student.password
         )
-        last_record_id = await database.execute(query)
 
-        # Получаем информацию о зарегистрированном студенте
-        student = await database.fetch_one(
-            Student.__table__.select().where(Student.id == last_record_id)
-        )
+        login = student.login
 
-        # Получаем ID группы по её имени
-        g_id = await get_group_id_by_name(group)
-        g_id = g_id.get("group_id")
+        student_query = select([func.count()]).select_from(Student.__table__).where(Student.login == login)
+        student_count = await database.fetch_val(student_query)
 
-        # Добавляем запись в таблицу group_students
-        query = GroupStudent.__table__.insert().values(
-            group_id=g_id,
-            student_id=student.id
-        )
-        await database.execute(query)
+        # Подсчитываем количество записей в таблице Parent, где login совпадает
+        parent_query = select([func.count()]).select_from(Parent.__table__).where(Parent.login == login)
+        parent_count = await database.fetch_val(parent_query)
 
-        # Получаем ID родителя по его логину
-        p_id = await get_parent_id_by_name(parent_login)
-        p_id = p_id.get('parent_id')
+        # Подсчитываем количество записей в таблице Teacher, где login совпадает
+        teacher_query = select([func.count()]).select_from(Teacher.__table__).where(Teacher.login == login)
+        teacher_count = await database.fetch_val(teacher_query)
 
-        # Добавляем запись в таблицу parent_students
-        query = ParentStudent.__table__.insert().values(
-            id_parent=p_id,
-            id_student=student.id
-        )
-        await database.execute(query)
+        total_count = student_count + parent_count + teacher_count
 
+        fl = total_count > 0
 
-        return StudentResponse(id=student.id, name=student.name, login=student.login)
+        if not fl:
+            last_record_id = await database.execute(query)
+
+            # Получаем информацию о зарегистрированном студенте
+            student = await database.fetch_one(
+                Student.__table__.select().where(Student.id == last_record_id)
+            )
+
+            # Получаем ID группы по её имени
+            g_id = await get_group_id_by_name(group)
+            g_id = g_id.get("group_id")
+
+            # Добавляем запись в таблицу group_students
+            query = GroupStudent.__table__.insert().values(
+                group_id=g_id,
+                student_id=student.id
+            )
+            await database.execute(query)
+
+            # Получаем ID родителя по его логину
+            p_id = await get_parent_id_by_name(parent_login)
+            p_id = p_id.get('parent_id')
+
+            # Добавляем запись в таблицу parent_students
+            query = ParentStudent.__table__.insert().values(
+                id_parent=p_id,
+                id_student=student.id
+            )
+            await database.execute(query)
+
+            return StudentResponse(id=student.id, name=student.name, login=student.login)
+
+        else:
+            raise HTTPException(status_code=505, detail="This login already exists")
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -295,36 +287,35 @@ async def create_event(event: EventCreate):
     await database.execute(query)
     return event
 
-# @app.post("add/statistics/", response_model=StatisticResponse)
-# async def add_statistic(statistic: StatisticCreate):
-#     query = Statistic.__table__.insert().values(**statistic.dict())
-#
-# @app.post("/add/statistic/")
-# def create_statistic(statistic: StatisticCreate):
-#     db = SessionLocal()
-#     db_statistic = Statistic(
-#         id_variant=statistic.id_variant,
-#         name_student=statistic.name_student,
-#         id_student=get_student_by_name(statistic.name_student),
-#         date=statistic.date,
-#         name_teacher=statistic.name_teacher,
-#         id_teacher=get_teacher_id_by_name(statistic.name_teacher),
-#         number_of_exercise=statistic.number_of_exercise,
-#         points=statistic.points
-#     )
-#     db.add(db_statistic)
-#     db.commit()
-#     db.refresh(db_statistic)
-#     return db_statistic
-
 
 # Регистрация родителя
 @app.post("/register/parent/", response_model=ParentResponse)
 async def register_parent(parent: ParentCreate):
     query = Parent.__table__.insert().values(**parent.dict())
-    last_record_id = await database.execute(query)
-    parent = await database.fetch_one(Parent.__table__.select().where(Parent.id == last_record_id))
-    return parent
+    login = parent.login
+
+    student_query = select([func.count()]).select_from(Student.__table__).where(Student.login == login)
+    student_count = await database.fetch_val(student_query)
+
+    # Подсчитываем количество записей в таблице Parent, где login совпадает
+    parent_query = select([func.count()]).select_from(Parent.__table__).where(Parent.login == login)
+    parent_count = await database.fetch_val(parent_query)
+
+    # Подсчитываем количество записей в таблице Teacher, где login совпадает
+    teacher_query = select([func.count()]).select_from(Teacher.__table__).where(Teacher.login == login)
+    teacher_count = await database.fetch_val(teacher_query)
+
+    total_count = student_count + parent_count + teacher_count
+
+    fl = total_count > 0
+
+    if not fl:
+        last_record_id = await database.execute(query)
+        parent = await database.fetch_one(Parent.__table__.select().where(Parent.id == last_record_id))
+        return parent
+    else:
+        raise HTTPException(status_code=500, detail="This login already exists")
+
 
 async def getIds(groups):
     query = select([Group.id]).where(Group.group_name.in_(groups))
@@ -335,19 +326,45 @@ async def getIds(groups):
 @app.post("/register/teacher/", response_model=TeacherResponse)
 async def register_teacher(teacher: TeacherCreate, groups: list[str]):
     query = Teacher.__table__.insert().values(**teacher.dict())
-    last_record_id = await database.execute(query)
-    teacher = await database.fetch_one(Teacher.__table__.select().where(Teacher.id == last_record_id))
+
+    login = teacher.login
+
+    student_query = select([func.count()]).select_from(Student.__table__).where(Student.login == login)
+    student_count = await database.fetch_val(student_query)
+
+    # Подсчитываем количество записей в таблице Parent, где login совпадает
+    parent_query = select([func.count()]).select_from(Parent.__table__).where(Parent.login == login)
+    parent_count = await database.fetch_val(parent_query)
+
+    # Подсчитываем количество записей в таблице Teacher, где login совпадает
+    teacher_query = select([func.count()]).select_from(Teacher.__table__).where(Teacher.login == login)
+    teacher_count = await database.fetch_val(teacher_query)
+
+    total_count = student_count + parent_count + teacher_count
+
+    fl = total_count > 0
+
+    if not fl:
+        last_record_id = await database.execute(query)
+        teacher = await database.fetch_one(Teacher.__table__.select().where(Teacher.id == last_record_id))
+
+        ids = await getIds(groups)
+        for (elem,) in ids:
+            query = TeacherGroup.__table__.insert().values(teacher_id=teacher.id, group_id=elem)
+            await database.execute(query)
+
+        return teacher
+
+    else:
+        raise HTTPException(status_code=500, detail="This login already exists")
 
 
     #инициализация полей в таблицу Teacher_group
 
 
-    ids = await getIds(groups)
-    for (elem,) in ids:
-        query = TeacherGroup.__table__.insert().values(teacher_id=teacher.id, group_id=elem)
-        await database.execute(query)
 
-    return teacher
+
+
 
 # Получение учителей ребенка через родителя
 @app.get("/teachers_by_parent/{parent_id}", response_model=list[TeacherResponse])
@@ -396,12 +413,6 @@ async def get_teachers(skip: int = 0, limit: int = 10):
     query = Teacher.__table__.select().offset(skip).limit(limit)
     teachers = await database.fetch_all(query)
     return teachers
-
-# @app.get("/statistics/", response_model=list[StatisticResponse])
-# async def get_statistics(skip: int = 0, limit: int = 10):
-#     query = Statistic.__table__.select().offset(skip).limit(limit)
-#     statistics = await database.fetch_all(query)
-#     return statistics
 
 # ...
 @app.post("/groups/create/")
