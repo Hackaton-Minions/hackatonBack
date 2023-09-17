@@ -213,6 +213,52 @@ async def get_event_by_user(user_type: str, user_id: int):
     return results
 
 
+@app.post("/authorization/")
+async def authorization(login: str, password: str):
+    try:
+        # Ищем пользователя с заданным логином и паролем в таблице Student
+        student_query = select([Student]).where((Student.login == login) & (Student.password == password))
+        student = await database.fetch_one(student_query)
+
+        if student:
+            user_type = "student"
+            user_id = student["id"]
+            name_user = student["name"]
+        else:
+            # Ищем пользователя в таблице Parent
+            parent_query = select([Parent]).where((Parent.login == login) & (Parent.password == password))
+            parent = await database.fetch_one(parent_query)
+
+            if parent:
+                user_type = "parent"
+                user_id = parent["id"]
+                name_user = parent["name"]
+            else:
+                # Ищем пользователя в таблице Teacher
+                teacher_query = select([Teacher]).where((Teacher.login == login) & (Teacher.password == password))
+                teacher = await database.fetch_one(teacher_query)
+
+                if teacher:
+                    user_type = "teacher"
+                    user_id = teacher["id"]
+                    name_user = teacher["name"]
+                else:
+                    raise HTTPException(status_code=401, detail="Неверные учетные данные")
+
+        # Возвращаем данные о пользователе
+        user_data = {
+            "id": user_id,
+            "user_type": user_type,
+            "name_user": name_user,
+        }
+
+        return user_data
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # Регистрация студента
 @app.post("/register/student/", response_model=StudentResponse)
 async def register_student(student: StudentCreate, group: str, parent_login: str):
